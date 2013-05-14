@@ -15,6 +15,7 @@ import sys
 import os
 import re
 import time
+import threading
 
 
 
@@ -34,8 +35,17 @@ class BaseLibvirt2rrd():
             print observer.__class__.__name__
 
     def update(self):
+        mythreads = []
         for observer in self.observers:
-            observer.update(self.res)
+            thread_name=threading.Thread(target=observer.update,args=(self.res,))
+            #mythreads.append(threading.Thread(
+            #    target=observer.update(),args=(self.res)))
+            mythreads.append(thread_name)
+        for i in mythreads:
+            i.start()
+
+        for i in mythreads:
+            i.join()
 
 class RRDChecker(BaseLibvirt2rrd):
     def __init__(self,remote=None):
@@ -70,13 +80,13 @@ class CmdChecker(BaseLibvirt2rrd):
         while True:
             self._run()
             time.sleep(1)
-            print "recorded successfully"
 
     def _run(self):
         cmd='/usr/bin/virt-top -n 2 -d 1 --block-in-bytes --stream'
         data=os.popen(cmd).read()
         self.convert_to_dict(data)
         self.update()
+        print "recorded successfully"
 
     def convert_to_dict(self,data):
         tmp=re.match(u'.*TIME\s*NAME(.*)',data,re.S)
@@ -140,7 +150,7 @@ class BaseObserver():
                 (path_uuid,rrdname,time,usage)
         os.popen(cmd).read()
 
-    def update(self):
+    def update(self,res):
         print "reporter: %s  " % self.name
 
 class CPUObserver(BaseObserver,object):
@@ -283,6 +293,7 @@ if __name__ == '__main__':
     #l2rrd.loopDomains()
     #monitor=MakeMonitors('cpu','mem','disk_in','disk_out','net_in','net_out')
     monitor=MakeMonitors('cpu','disk_in','disk_out','net_in','net_out')
+    #monitor=MakeMonitors('cpu')
     l2rrd.addMonitors(monitor.monitors)
     #l2rrd.showMonitors()
     l2rrd.run()
