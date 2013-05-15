@@ -19,7 +19,15 @@ import threading
 
 
 
+
 class BaseLibvirt2rrd():
+    '''
+    main libvirt 2 rrd class
+    need to initialize a driver to spawn a new instance
+    monitors should be specified with MakeMonitor class
+
+    '''
+
     def __init__(self,remote=None):
         self.observers=[]
         self.init_rrd_flag=0
@@ -53,12 +61,22 @@ class BaseLibvirt2rrd():
         for observer in self.observers:
             observer.init_rrd(self.res)
 
-class RRDCollector():
+class VMCollector():
+    '''
+    vm infomation Collector abstract driver class 
+    get_res return a dict to Libvirt2rrd instance 
+    '''
+
     def get_res(self):
         pass
 
 
-class LibrrdCollector(BaseLibvirt2rrd):
+class LibvirtCollector(BaseLibvirt2rrd):
+    '''
+    use python-libvirt to retrieve infomation, 
+    not implemented yet
+    '''
+
     def __init__(self,remote=None):
         self.conn = libvirt.openReadOnly(remote)
         self.observers=[]
@@ -87,6 +105,15 @@ class LibrrdCollector(BaseLibvirt2rrd):
             observer.update(self.res)
 
 class CmdCollector(BaseLibvirt2rrd):
+    '''
+    use command line to retrieve infomation 
+    command like: 
+        /usr/bin/virt-top -n 2 -d 1 --block-in-bytes --stream
+
+    notice that -d params is specified , 
+    we need to discard the first data
+
+    '''
 
     def run(self):
         while True:
@@ -143,6 +170,16 @@ class CmdCollector(BaseLibvirt2rrd):
 
 
 class BaseObserver():
+    '''
+    rrd observer template class 
+    get a dict from Libvirt2rrd ,
+    convert it into rrd ,or other datastore
+
+    right now, only rrd is supported ,
+    more store driver will be added in the futrue .
+    '''
+
+
     def __init__(self):
         self.path='/tmp/dcai/rrd'
 
@@ -172,6 +209,9 @@ class BaseObserver():
             self._safe_create_rrd(uuid,self.rrdname)
 
 class CPUObserver(BaseObserver,object):
+    '''
+    observe cpu info
+    '''
     def __init__(self):
         super(CPUObserver, self).__init__()
 
@@ -188,6 +228,14 @@ class CPUObserver(BaseObserver,object):
 
 
 class MemoryObserver(BaseObserver,object):
+    '''
+    observer memory info
+    memory infomation is not the real memory cosumption in vm ,
+    virt-fish should be a good solution for this 
+
+    right now, this is not usable 
+    '''
+
     def __init__(self):
         super(MemoryObserver,self).__init__()
         self.name='memory monitor'
@@ -202,9 +250,12 @@ class MemoryObserver(BaseObserver,object):
 
 
 
-class DiskInbondObserver(BaseObserver,object):
+class DiskReadbondObserver(BaseObserver,object):
+    ''' 
+    observer disk read info
+    '''
     def __init__(self):
-        super(DiskInbondObserver,self).__init__()
+        super(DiskReadbondObserver,self).__init__()
         self.name='disk inbound monitor'
         self.rrdname='disk_read.rrd'
 
@@ -216,9 +267,12 @@ class DiskInbondObserver(BaseObserver,object):
             self._update_rrd(uuid,self.rrdname,res[uuid]['TIME'],res[uuid]['RDBY'])
 
 
-class DiskOutbondObserver(BaseObserver,object):
+class DiskWriteObserver(BaseObserver,object):
+    ''' 
+    observer disk write info
+    '''
     def __init__(self):
-        super(DiskOutbondObserver,self).__init__()
+        super(DiskWriteObserver,self).__init__()
         self.name='disk outbound monitor'
         self.rrdname='disk_write.rrd'
     def update(self,res):
@@ -230,6 +284,9 @@ class DiskOutbondObserver(BaseObserver,object):
 
 
 class NetworkInboundObserver(BaseObserver,object):
+    ''' 
+    observer network inbound info
+    '''
     def __init__(self):
         super(NetworkInboundObserver,self).__init__()
         self.name='network inbound monitor'
@@ -243,6 +300,9 @@ class NetworkInboundObserver(BaseObserver,object):
 
 
 class NetworkOutboundObserver(BaseObserver,object):
+    ''' 
+    observer network outbound info
+    '''
     def __init__(self):
         super(NetworkOutboundObserver,self).__init__()
         self.name='network outbound monitor'
@@ -257,20 +317,25 @@ class NetworkOutboundObserver(BaseObserver,object):
 
 
 class Driver():
+    '''
+    back end store abstract class
+    '''
     pass
 
 class RRDDriver(Driver):
+    '''
+    rrd store class
+    not implement yet
+    '''
     pass
 
 class CSVDriver(Driver):
+    '''
+    csv store class
+    not implement yet
+    '''
     pass
 
-
-class CheckDriver():
-    pass
-
-class CMDChecker(CheckDriver):
-    pass
 
 class MakeMonitors():
     def __init__(self,*args,**kwgs):
@@ -286,13 +351,13 @@ class MakeMonitors():
             mem=MemoryObserver()
             self.monitors.append(mem)
 
-        if 'disk_in' in args:
-            disk_in=DiskInbondObserver()
-            self.monitors.append(disk_in)
+        if 'disk_read' in args:
+            disk_read=DiskReadbondObserver()
+            self.monitors.append(disk_read)
 
-        if 'disk_out' in args:
-            disk_out=DiskOutbondObserver()
-            self.monitors.append(disk_out)
+        if 'disk_write' in args:
+            disk_write=DiskWriteObserver()
+            self.monitors.append(disk_write)
 
         if 'net_in' in args:
             net_in=NetworkInboundObserver()
@@ -307,7 +372,7 @@ if __name__ == '__main__':
     #l2rrd=Libvirt2rrd()
     l2rrd=CmdCollector()
     #l2rrd.loopDomains()
-    monitor=MakeMonitors('cpu','disk_in','disk_out','net_in','net_out')
+    monitor=MakeMonitors('cpu','disk_read','disk_write','net_in','net_out')
     #monitor=MakeMonitors('cpu')
     l2rrd.addMonitors(monitor.monitors)
     #l2rrd.showMonitors()
