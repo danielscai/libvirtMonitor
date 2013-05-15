@@ -17,6 +17,58 @@ import re
 import time
 import threading
 
+class LibvirtMonitor():
+    '''
+    libvirt monitor class.
+
+    data source driver supported : 
+        LibvirtCollector
+        CmdCollector
+
+    data store drive supported:
+        RRDDriver
+        CSVDriver
+        PNPDriver
+    '''
+    def __init__(self,collector):
+        self.collector=collector
+        self.monitors=[]
+        self.init_rrd_flag=0
+
+    def add_monitor(self,monitor):
+        self.monitors.append(monitor)
+
+    def add_monitors(self,monitors):
+        ''' add all monitors '''
+        for monitor in monitors:
+            self.add_monitor(monitor)
+
+    def showMonitors(self):
+        '''show all monitors classname'''
+        for monitor in self.monitors:
+            print monitor.__class__.__name__
+
+    def run(self):
+        '''
+        run the data source get_res funtion
+        each time res will write back to data store driver
+        sleep 1 second for rest :)
+        '''
+        while True:
+            self.res=self.collector.get_res()
+            self.update()
+            time.sleep(1)
+
+    def update(self):
+        #if self.init_rrd_flag==0:
+        #    self.init_rrd()
+
+        for observer in self.observers:
+            observer.update(self.res)
+
+    def init_rrd(self):
+        for observer in self.observers:
+            observer.init_rrd(self.res)
 
 
 
@@ -43,6 +95,11 @@ class BaseLibvirt2rrd():
         for observer in  self.observers:
             print observer.__class__.__name__
 
+    def run(self):
+        while True:
+            self._run()
+            time.sleep(1)
+
     def update(self):
         if self.init_rrd_flag==0:
             self.init_rrd()
@@ -61,7 +118,7 @@ class BaseLibvirt2rrd():
         for observer in self.observers:
             observer.init_rrd(self.res)
 
-class VMCollector():
+class Collector():
     '''
     vm infomation Collector abstract driver class 
     get_res return a dict to Libvirt2rrd instance 
@@ -104,7 +161,7 @@ class LibvirtCollector(BaseLibvirt2rrd):
         for observer in self.observers:
             observer.update(self.res)
 
-class CmdCollector(BaseLibvirt2rrd):
+class CmdCollector(Collector,object):
     '''
     use command line to retrieve infomation 
     command like: 
@@ -115,17 +172,14 @@ class CmdCollector(BaseLibvirt2rrd):
 
     '''
 
-    def run(self):
-        while True:
-            self._run()
-            time.sleep(1)
+    def get_res(self):
+        self._get_res()
+        return self.res
 
-    def _run(self):
+    def _get_res(self):
         cmd='/usr/bin/virt-top -n 2 -d 1 --block-in-bytes --stream'
         data=os.popen(cmd).read()
         self.convert_to_dict(data)
-        self.update()
-        print "recorded successfully"
 
     def convert_to_dict(self,data):
         tmp=re.match(u'.*TIME\s*NAME(.*)',data,re.S)
@@ -164,9 +218,6 @@ class CmdCollector(BaseLibvirt2rrd):
         #uuid=os.popen(cmd).read()
         #uuid.strip()
         return uuid
-
-    def _get_cpu_percent(self,):
-        pass
 
 
 class BaseObserver():
@@ -335,6 +386,12 @@ class CSVDriver(Driver):
     not implement yet
     '''
     pass
+
+class PNPDriver(Driver):
+    '''
+    pnp driver class 
+    save data into pnp  spool
+    '''
 
 
 class MakeMonitors():
