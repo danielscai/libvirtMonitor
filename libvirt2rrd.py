@@ -22,6 +22,7 @@ import threading
 class BaseLibvirt2rrd():
     def __init__(self,remote=None):
         self.observers=[]
+        self.init_rrd_flag=0
 
     def addObserver(self,observer):
         self.observers.append(observer)
@@ -35,11 +36,12 @@ class BaseLibvirt2rrd():
             print observer.__class__.__name__
 
     def update(self):
+        if self.init_rrd_flag==0:
+            self.init_rrd()
         mythreads = []
         for observer in self.observers:
-            thread_name=threading.Thread(target=observer.update,args=(self.res,))
-            #mythreads.append(threading.Thread(
-            #    target=observer.update(),args=(self.res)))
+            thread_name=threading.Thread(
+                    target=observer.update,args=(self.res,))
             mythreads.append(thread_name)
         for i in mythreads:
             i.start()
@@ -47,7 +49,16 @@ class BaseLibvirt2rrd():
         for i in mythreads:
             i.join()
 
-class RRDChecker(BaseLibvirt2rrd):
+    def init_rrd(self):
+        for observer in self.observers:
+            observer.init_rrd(self.res)
+
+class RRDCollector():
+    def get_res(self):
+        pass
+
+
+class LibrrdCollector(BaseLibvirt2rrd):
     def __init__(self,remote=None):
         self.conn = libvirt.openReadOnly(remote)
         self.observers=[]
@@ -55,6 +66,7 @@ class RRDChecker(BaseLibvirt2rrd):
             print 'Failed to open connection to the hypervisor'
             sys.exit(1)
         self.getDomains()
+
 
     def getDomains(self):
         self.domains=self.conn.listAllDomains(1)
@@ -74,7 +86,7 @@ class RRDChecker(BaseLibvirt2rrd):
         for observer in self.observers:
             observer.update(self.res)
 
-class CmdChecker(BaseLibvirt2rrd):
+class CmdCollector(BaseLibvirt2rrd):
 
     def run(self):
         while True:
@@ -141,7 +153,7 @@ class BaseObserver():
     def _safe_create_rrd(self,uuid,rrdname):
         path_uuid=self.path+'/'+uuid
         if not os.path.exists(path_uuid+'/'+self.rrdname):
-            cmd="/usr/bin/rrdtool create %s/%s -s 1 DS:CPU:GAUGE:10:U:U RRA:LAST:0.5:5:6307200" % (path_uuid,rrdname)
+            cmd="/usr/bin/rrdtool create %s/%s -s 1 DS:CPU:GAUGE:10:U:U RRA:AVERAGE:0.5:10:3153600" % (path_uuid,rrdname)
             os.popen(cmd)
 
     def _update_rrd(self,uuid,rrdname,time,usage):
@@ -152,6 +164,12 @@ class BaseObserver():
 
     def update(self,res):
         print "reporter: %s  " % self.name
+
+    def init_rrd(self,res):
+        for uuid in res.keys():
+            path_uuid=self.path+'/'+uuid
+            self._safe_make_dir(path_uuid)
+            self._safe_create_rrd(uuid,self.rrdname)
 
 class CPUObserver(BaseObserver,object):
     def __init__(self):
@@ -287,11 +305,8 @@ class MakeMonitors():
 
 if __name__ == '__main__':
     #l2rrd=Libvirt2rrd()
-    #l2rrd=RRDChecker()
-    #print dir(l2rrd)
-    l2rrd=CmdChecker()
+    l2rrd=CmdCollector()
     #l2rrd.loopDomains()
-    #monitor=MakeMonitors('cpu','mem','disk_in','disk_out','net_in','net_out')
     monitor=MakeMonitors('cpu','disk_in','disk_out','net_in','net_out')
     #monitor=MakeMonitors('cpu')
     l2rrd.addMonitors(monitor.monitors)
