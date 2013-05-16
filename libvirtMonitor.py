@@ -1,7 +1,7 @@
 #!/usr/bin/python
 
 '''
-libvirt2rrd
+libvirtMonitor
 
 monitoring kvm with libvirt and convert performance data into rrd. 
 
@@ -17,23 +17,90 @@ import re
 import time
 import threading
 
+class LibvirtMonitor():
+    '''
+    libvirt monitor class.
+
+    data source driver supported : 
+        LibvirtCollector
+        CmdCollector
+
+    data store drive supported:
+        RRDStore
+        CSVStore
+        PNPStore
+    '''
+    def __init__(self,collector):
+        self.collector=collector
+        self.monitors=[]
+        self.init_rrd_flag=0
+
+    def add_monitor(self,monitor):
+        self.monitors.append(monitor)
+
+    def add_monitors(self,monitors):
+        ''' add all monitors '''
+        for monitor in monitors.monitors:
+            self.add_monitor(monitor)
+
+
+    def show_monitors(self):
+        '''show all monitors classname'''
+        for monitor in self.monitors:
+            print monitor.__class__.__name__
+        
+
+    def run(self):
+        '''
+        run the data source get_res funtion
+        each time res will write back to data store driver
+        sleep 1 second for rest :)
+        '''
+        while True:
+            self.res=self.collector.get_res()
+            self.update()
+            print "record add succefully"
+            time.sleep(1)
+
+    def update(self):
+        #if self.init_rrd_flag==0:
+        #    self.init_rrd()
+
+        for monitor in self.monitors:
+            monitor.update(self.res)
+
+    def init_rrd(self):
+        for monitor in self.monitors:
+            monitor.init_rrd(self.res)
 
 
 class BaseLibvirt2rrd():
+    '''
+    main libvirt 2 rrd class
+    need to initialize a driver to spawn a new instance
+    monitors should be specified with MakeMonitor class
+
+    '''
+
     def __init__(self,remote=None):
         self.observers=[]
         self.init_rrd_flag=0
 
-    def addObserver(self,observer):
+    def addMonitor(self,observer):
         self.observers.append(observer)
 
     def addMonitors(self,monitors):
         for monitor in monitors:
-            self.addObserver(monitor)
+            self.addMonitor(monitor)
 
     def showMonitors(self):
         for observer in  self.observers:
             print observer.__class__.__name__
+
+    def run(self):
+        while True:
+            self._run()
+            time.sleep(1)
 
     def update(self):
         if self.init_rrd_flag==0:
@@ -53,12 +120,22 @@ class BaseLibvirt2rrd():
         for observer in self.observers:
             observer.init_rrd(self.res)
 
-class RRDCollector():
+class Collector():
+    '''
+    vm infomation Collector abstract driver class 
+    get_res return a dict to Libvirt2rrd instance 
+    '''
+
     def get_res(self):
         pass
 
 
-class LibrrdCollector(BaseLibvirt2rrd):
+class LibvirtCollector(BaseLibvirt2rrd):
+    '''
+    use python-libvirt to retrieve infomation, 
+    not implemented yet
+    '''
+
     def __init__(self,remote=None):
         self.conn = libvirt.openReadOnly(remote)
         self.observers=[]
@@ -86,19 +163,25 @@ class LibrrdCollector(BaseLibvirt2rrd):
         for observer in self.observers:
             observer.update(self.res)
 
-class CmdCollector(BaseLibvirt2rrd):
+class CmdCollector(Collector,object):
+    '''
+    use command line to retrieve infomation 
+    command like: 
+        /usr/bin/virt-top -n 2 -d 1 --block-in-bytes --stream
 
-    def run(self):
-        while True:
-            self._run()
-            time.sleep(1)
+    notice that -d params is specified , 
+    we need to discard the first data
 
-    def _run(self):
+    '''
+
+    def get_res(self):
+        self._get_res()
+        return self.res
+
+    def _get_res(self):
         cmd='/usr/bin/virt-top -n 2 -d 1 --block-in-bytes --stream'
         data=os.popen(cmd).read()
         self.convert_to_dict(data)
-        self.update()
-        print "recorded successfully"
 
     def convert_to_dict(self,data):
         tmp=re.match(u'.*TIME\s*NAME(.*)',data,re.S)
@@ -138,11 +221,18 @@ class CmdCollector(BaseLibvirt2rrd):
         #uuid.strip()
         return uuid
 
-    def _get_cpu_percent(self,):
-        pass
+
+class BaseMonitor():
+    '''
+    rrd observer template class 
+    get a dict from Libvirt2rrd ,
+    convert it into rrd ,or other datastore
+
+    right now, only rrd is supported ,
+    more store driver will be added in the futrue .
+    '''
 
 
-class BaseObserver():
     def __init__(self):
         self.path='/tmp/dcai/rrd'
 
@@ -171,9 +261,12 @@ class BaseObserver():
             self._safe_make_dir(path_uuid)
             self._safe_create_rrd(uuid,self.rrdname)
 
-class CPUObserver(BaseObserver,object):
+class CPUMonitor(BaseMonitor,object):
+    '''
+    observe cpu info
+    '''
     def __init__(self):
-        super(CPUObserver, self).__init__()
+        super(CPUMonitor, self).__init__()
 
         self.name='cpu monitor'
         self.rrdname='cpu.rrd'
@@ -187,9 +280,17 @@ class CPUObserver(BaseObserver,object):
 
 
 
-class MemoryObserver(BaseObserver,object):
+class MemoryMonitor(BaseMonitor,object):
+    '''
+    observer memory info
+    memory infomation is not the real memory cosumption in vm ,
+    virt-fish should be a good solution for this 
+
+    right now, this is not usable 
+    '''
+
     def __init__(self):
-        super(MemoryObserver,self).__init__()
+        super(MemoryMonitor,self).__init__()
         self.name='memory monitor'
         self.rrdname='mem.rrd'
 
@@ -202,9 +303,12 @@ class MemoryObserver(BaseObserver,object):
 
 
 
-class DiskInbondObserver(BaseObserver,object):
+class DiskReadbondMonitor(BaseMonitor,object):
+    ''' 
+    observer disk read info
+    '''
     def __init__(self):
-        super(DiskInbondObserver,self).__init__()
+        super(DiskReadbondMonitor,self).__init__()
         self.name='disk inbound monitor'
         self.rrdname='disk_read.rrd'
 
@@ -216,9 +320,12 @@ class DiskInbondObserver(BaseObserver,object):
             self._update_rrd(uuid,self.rrdname,res[uuid]['TIME'],res[uuid]['RDBY'])
 
 
-class DiskOutbondObserver(BaseObserver,object):
+class DiskWriteMonitor(BaseMonitor,object):
+    ''' 
+    observer disk write info
+    '''
     def __init__(self):
-        super(DiskOutbondObserver,self).__init__()
+        super(DiskWriteMonitor,self).__init__()
         self.name='disk outbound monitor'
         self.rrdname='disk_write.rrd'
     def update(self,res):
@@ -229,9 +336,12 @@ class DiskOutbondObserver(BaseObserver,object):
             self._update_rrd(uuid,self.rrdname,res[uuid]['TIME'],res[uuid]['WRBY'])
 
 
-class NetworkInboundObserver(BaseObserver,object):
+class NetworkInboundMonitor(BaseMonitor,object):
+    ''' 
+    observer network inbound info
+    '''
     def __init__(self):
-        super(NetworkInboundObserver,self).__init__()
+        super(NetworkInboundMonitor,self).__init__()
         self.name='network inbound monitor'
         self.rrdname='network_in.rrd'
     def update(self,res):
@@ -242,9 +352,12 @@ class NetworkInboundObserver(BaseObserver,object):
             self._update_rrd(uuid,self.rrdname,res[uuid]['TIME'],res[uuid]['CPU'])
 
 
-class NetworkOutboundObserver(BaseObserver,object):
+class NetworkOutboundMonitor(BaseMonitor,object):
+    ''' 
+    observer network outbound info
+    '''
     def __init__(self):
-        super(NetworkOutboundObserver,self).__init__()
+        super(NetworkOutboundMonitor,self).__init__()
         self.name='network outbound monitor'
         self.rrdname='network_out.rrd'
     def update(self,res):
@@ -256,60 +369,75 @@ class NetworkOutboundObserver(BaseObserver,object):
 
 
 
-class Driver():
+class Store():
+    '''
+    back end store abstract class
+    '''
     pass
 
-class RRDDriver(Driver):
+class RRDStore(Store):
+    '''
+    rrd store class
+    not implement yet
+    '''
     pass
 
-class CSVDriver(Driver):
+class CSVStore(Store):
+    '''
+    csv store class
+    not implement yet
+    '''
     pass
 
+class PNPStore(Store):
+    '''
+    pnp driver class 
+    save data into pnp  spool
+    '''
 
-class CheckDriver():
-    pass
-
-class CMDChecker(CheckDriver):
-    pass
 
 class MakeMonitors():
-    def __init__(self,*args,**kwgs):
+    def __init__(self,store,resource):
         self.monitors=[]
-        self.make_monitor(*args,**kwgs)
+        self.store=store
+        self.resource=resource
+        self.add_monitors()
 
-    def make_monitor(self,*args,**kwgs):
-        if 'cpu' in args:
-            cpu=CPUObserver()
+    def add_monitors(self):
+        if 'cpu' in self.resource:
+            cpu=CPUMonitor()
             self.monitors.append(cpu)
 
-        if 'mem' in args:
-            mem=MemoryObserver()
+        if 'mem' in self.resource:
+            mem=MemoryMonitor()
             self.monitors.append(mem)
 
-        if 'disk_in' in args:
-            disk_in=DiskInbondObserver()
-            self.monitors.append(disk_in)
+        if 'disk_read' in self.resource:
+            disk_read=DiskReadbondMonitor()
+            self.monitors.append(disk_read)
 
-        if 'disk_out' in args:
-            disk_out=DiskOutbondObserver()
-            self.monitors.append(disk_out)
+        if 'disk_write' in self.resource:
+            disk_write=DiskWriteMonitor()
+            self.monitors.append(disk_write)
 
-        if 'net_in' in args:
-            net_in=NetworkInboundObserver()
+        if 'net_in' in self.resource:
+            net_in=NetworkInboundMonitor()
             self.monitors.append(net_in)
 
-        if 'net_out' in args:
-            net_out=NetworkOutboundObserver()
+        if 'net_out' in self.resource:
+            net_out=NetworkOutboundMonitor()
             self.monitors.append(net_out)
     
 
 if __name__ == '__main__':
-    #l2rrd=Libvirt2rrd()
-    l2rrd=CmdCollector()
-    #l2rrd.loopDomains()
-    monitor=MakeMonitors('cpu','disk_in','disk_out','net_in','net_out')
-    #monitor=MakeMonitors('cpu')
-    l2rrd.addMonitors(monitor.monitors)
-    #l2rrd.showMonitors()
-    l2rrd.run()
+    collector=CmdCollector()
+    lmon=LibvirtMonitor(collector)
+
+    store=PNPStore()
+    resource=['cpu','disk_read','disk_write','net_in','net_out']
+    monitors=MakeMonitors(store,resource)
+
+    lmon.add_monitors(monitors)
+    lmon.show_monitors()
+    lmon.run()
     
