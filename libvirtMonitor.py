@@ -15,7 +15,10 @@ import sys
 import os
 import re
 import time
-import threading
+import socket
+
+pnp4nagios_spool='/usr/local/pnp4nagios/var/spool'
+interval=4
 
 class LibvirtMonitor():
     '''
@@ -43,7 +46,6 @@ class LibvirtMonitor():
         for monitor in monitors.monitors:
             self.add_monitor(monitor)
 
-
     def show_monitors(self):
         '''show all monitors classname'''
         for monitor in self.monitors:
@@ -60,7 +62,7 @@ class LibvirtMonitor():
             self.res=self.collector.get_res()
             self.update()
             print "record add succefully"
-            time.sleep(1)
+            time.sleep(interval)
 
     def update(self):
         #if self.init_rrd_flag==0:
@@ -185,114 +187,40 @@ class Monitor():
     more store driver will be added in the futrue .
     '''
 
-    def __init__(self,store,name,mon_res):
-        self.name=name
+    def __init__(self,resource,mon_res,*kwgs):
+        self.stores=kwgs
+        self.resource=resource
+        self.name=self.resource
         self.mon_res=mon_res
-        self.store=store
         self.path='/tmp/dcai/rrd'
 
     def update(self,res):
-        self.store.update(res)
+        for store in self.stores:
+            store.write(res,self.mon_res,self.name)
 
+class MakeMonitors():
+    def __init__(self,resources,*kwgs):
+        self.monitors=[]
+        self.resources=resources
+        self.monitor_resources={
+                'cpu':'CPU',
+                'mem':'MEM',
+                'disk_read':'RDBY',
+                'disk_write':'WRBY',
+                'network_in':'RXBY',
+                'network_out':'TXBY',
+                's':'S'
+        }
+        self.add_monitors(*kwgs)
 
-class CPUMonitor(Monitor,object):
-    '''
-    observe cpu info
-    '''
-    def __init__(self,*args,**kwgs):
-        super(CPUMonitor, self).__init__()
-        self.name='cpu monitor'
-        self.rrdname='cpu.rrd'
-
-
-class MemoryMonitor(Monitor,object):
-    '''
-    observer memory info
-    memory infomation is not the real memory cosumption in vm ,
-    virt-fish should be a good solution for this 
-
-    right now, this is not usable 
-    '''
-
-    def __init__(self,*args,**kwgs):
-        super(MemoryMonitor,self).__init__()
-        self.name='memory monitor'
-        self.rrdname='mem.rrd'
-
-    def update(self,res):
-        for uuid in res.keys():
-            path_uuid=self.path+'/'+uuid
-            self._safe_make_dir(path_uuid)
-            self._safe_create_rrd(uuid,self.rrdname)
-            self._update_rrd(uuid,self.rrdname,res[uuid]['TIME'],res[uuid]['MEM'])
-
-
-
-class DiskReadMonitor(Monitor,object):
-    ''' 
-    observer disk read info
-    '''
-    def __init__(self,*args,**kwgs):
-        super(DiskReadMonitor,self).__init__()
-        self.name='disk inbound monitor'
-        self.rrdname='disk_read.rrd'
-
-    def update(self,res):
-        for uuid in res.keys():
-            path_uuid=self.path+'/'+uuid
-            self._safe_make_dir(path_uuid)
-            self._safe_create_rrd(uuid,self.rrdname)
-            self._update_rrd(uuid,self.rrdname,res[uuid]['TIME'],res[uuid]['RDBY'])
-
-
-class DiskWriteMonitor(Monitor,object):
-    ''' 
-    observer disk write info
-    '''
-    def __init__(self,*args,**kwgs):
-        super(DiskWriteMonitor,self).__init__()
-        self.name='disk outbound monitor'
-        self.rrdname='disk_write.rrd'
-    def update(self,res):
-        for uuid in res.keys():
-            path_uuid=self.path+'/'+uuid
-            self._safe_make_dir(path_uuid)
-            self._safe_create_rrd(uuid,self.rrdname)
-            self._update_rrd(uuid,self.rrdname,res[uuid]['TIME'],res[uuid]['WRBY'])
-
-
-class NetworkInboundMonitor(Monitor,object):
-    ''' 
-    observer network inbound info
-    '''
-    def __init__(self):
-        super(NetworkInboundMonitor,self).__init__()
-        self.name='network inbound monitor'
-        self.rrdname='network_in.rrd'
-    def update(self,res):
-        for uuid in res.keys():
-            path_uuid=self.path+'/'+uuid
-            self._safe_make_dir(path_uuid)
-            self._safe_create_rrd(uuid,self.rrdname)
-            self._update_rrd(uuid,self.rrdname,res[uuid]['TIME'],res[uuid]['CPU'])
-
-
-class NetworkOutboundMonitor(Monitor,object):
-    ''' 
-    observer network outbound info
-    '''
-    def __init__(self):
-        super(NetworkOutboundMonitor,self).__init__()
-        self.name='network outbound monitor'
-        self.rrdname='network_out.rrd'
-    def update(self,res):
-        for uuid in res.keys():
-            path_uuid=self.path+'/'+uuid
-            self._safe_make_dir(path_uuid)
-            self._safe_create_rrd(uuid,self.rrdname)
-            self._update_rrd(uuid,self.rrdname,res[uuid]['TIME'],res[uuid]['CPU'])
-
-
+    def add_monitors(self,*kwgs):
+        mon_res=self.monitor_resources
+        for resource in self.resources:
+            if not mon_res.has_key(resource):
+                continue
+            monitor=Monitor(resource,
+                            mon_res[resource], *kwgs)
+            self.monitors.append(monitor)
 
 class Store():
     '''
@@ -345,50 +273,38 @@ class PNPStore(Store):
     pnp driver class 
     save data into pnp  spool
     '''
+    hostname=socket.gethostname()
+    tmpl="DATATYPE::SERVICEPERFDATA TIMET::%s   HOSTNAME::%s SERVICEDESC::%s   SERVICEPERFDATA::%s=%s;0self.SERVICECHECKCOMMAND::dummy command   HOSTSTATE::UP   HOSTSTATETYPE::HARD SERVICESTATE::OK    SERVICESTATETYPE::HARD\n"
 
-    def update(self,res):
+    def __init__(self):
+        if not os.path.exists(pnp4nagios_spool):
+            print "pnp4nagios spool dir not exist: %s" % pnp4nagios_spool
+            print "make it first"
+            exit(1)
+
+    def write(self,res,mon_res,monitor_name):
+        now=str(int(time.time()))
+        file_name_arr=[pnp4nagios_spool+"/service-perfdata",
+                self.hostname, monitor_name, now]
+        file_name='.'.join(file_name_arr)
+        tmp_file=''
         for uuid in res.keys():
-            print uuid
-
-
-class MakeMonitors():
-    def __init__(self,store,resources):
-        self.monitors=[]
-        self.store=store
-        self.resources=resources
-        self.monitor_resources={
-                'cpu':'CPU',
-                'mem':'MEM',
-                'disk_read':'RDBY',
-                'disk_write':'WRBY',
-                'network_in':'RXBY',
-                'network_out':'TXBY',
-                's':'S'
-        }
-        self.add_monitors()
-
-    def add_monitors(self):
-        mon_res=self.monitor_resources
-        for resource in self.resources:
-            if not mon_res.has_key(resource):
-                continue
-            monitor=Monitor(self.store,
-                            resource,
-                            mon_res[resource])
-            self.monitors.append(monitor)
-
+            pnp_perfdata=self.tmpl % (now, uuid,monitor_name,
+                    monitor_name,res[uuid][mon_res])
+            tmp_file+=pnp_perfdata
+        with open(file_name,'w') as f:
+            f.write(tmp_file)
 
 if __name__ == '__main__':
     collector=CmdCollector()
-    lmon=LibvirtMonitor(collector)
 
-    store=PNPStore()
-    resource=['cpu',
-            'disk_read','disk_write',
+    pnpstore=PNPStore()
+    resource=['cpu', 'disk_read','disk_write',
             'network_in','network_out']
-    monitors=MakeMonitors(store,resource)
+    monitors=MakeMonitors(resource,pnpstore)
 
+    lmon=LibvirtMonitor(collector)
     lmon.add_monitors(monitors)
-    lmon.show_monitors()
+    #lmon.show_monitors()
     lmon.run()
     
