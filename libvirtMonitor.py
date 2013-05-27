@@ -19,6 +19,7 @@ import socket
 
 pnp4nagios_spool='/usr/local/pnp4nagios/var/spool'
 interval=4
+os.umask(000)
 
 class LibvirtMonitor():
     '''
@@ -154,7 +155,7 @@ class CmdCollector(Collector,object):
                     'WRBY':tmp[4].strip('K'),
                     'RXBY':tmp[5],
                     'TXBY':tmp[6],
-                    'CPU':tmp[7],
+                    'CPU':tmp[7]+'%',
                     'MEM':tmp[8],
                     'TIME':tmp[9],
                     'NAME':tmp[10],
@@ -186,6 +187,16 @@ class Monitor():
     right now, only rrd is supported ,
     more store driver will be added in the futrue .
     '''
+    
+    monitor_name_dict={
+            'CPU':'cpu_usage',
+            'MEM':'memory_usage',
+            'RDBY':'disk_read',
+            'WRBY':'disk_write',
+            'RXBY':'network_inbond',
+            'TXBY':'network_outbond',
+            'S':'s',
+    }
 
     def __init__(self,resource,mon_res,*kwgs):
         self.stores=kwgs
@@ -196,20 +207,25 @@ class Monitor():
 
     def update(self,res):
         for store in self.stores:
-            store.write(res,self.mon_res,self.name)
+            store.write(res,self.mon_res,self.name,self. monitor_name_dict)
 
 class MakeMonitors():
     def __init__(self,resources,*kwgs):
+        '''
+        supported backend store in kwgs
+        '''
         self.monitors=[]
         self.resources=resources
         self.monitor_resources={
-                'cpu':'CPU',
-                'mem':'MEM',
-                'disk_read':'RDBY',
-                'disk_write':'WRBY',
-                'network_in':'RXBY',
-                'network_out':'TXBY',
-                's':'S'
+                'cpu':['CPU'],
+                'mem':['MEM'],
+                'disk_read':['RDBY'],
+                'disk_write':['WRBY'],
+                'disk':['RDBY','WRBY'],
+                'network_in':['RXBY'],
+                'network_out':['TXBY'],
+                'network':['RXBY','TXBY'],
+                's':['S']
         }
         self.add_monitors(*kwgs)
 
@@ -272,9 +288,11 @@ class PNPStore(Store):
     '''
     pnp driver class 
     save data into pnp  spool
+    service_perfdata_file_template=
+          DATATYPE::SERVICEPERFDATA\tTIMET::$TIMET$\tHOSTNAME::$HOSTNAME$\tSERVICEDESC::$SERVICEDESC$\tSERVICEPERFDATA::$SERVICEPERFDATA$\tSERVICECHECKCOMMAND::$SERVICECHECKCOMMAND$\tHOSTSTATE::$HOSTSTATE$\tHOSTSTATETYPE::$HOSTSTATETYPE$\tSERVICESTATE::$SERVICESTATE$\tSERVICESTATETYPE::$SERVICESTATETYPE$
     '''
     hostname=socket.gethostname()
-    tmpl="DATATYPE::SERVICEPERFDATA TIMET::%s   HOSTNAME::%s SERVICEDESC::%s   SERVICEPERFDATA::%s=%s;0self.SERVICECHECKCOMMAND::dummy command   HOSTSTATE::UP   HOSTSTATETYPE::HARD SERVICESTATE::OK    SERVICESTATETYPE::HARD\n"
+    tmpl="DATATYPE::SERVICEPERFDATA\tTIMET::%s\tHOSTNAME::%s\tSERVICEDESC::%s\tSERVICEPERFDATA::%s\tSERVICECHECKCOMMAND::dummy_command\tHOSTSTATE::UP\tHOSTSTATETYPE::HARD\tSERVICESTATE::OK\tSERVICESTATETYPE::HARD\n"
 
     def __init__(self):
         if not os.path.exists(pnp4nagios_spool):
@@ -282,15 +300,18 @@ class PNPStore(Store):
             print "make it first"
             exit(1)
 
-    def write(self,res,mon_res,monitor_name):
+    def write(self,res,mon_res,monitor_name,name_dict):
         now=str(int(time.time()))
         file_name_arr=[pnp4nagios_spool+"/service-perfdata",
                 self.hostname, monitor_name, now]
         file_name='.'.join(file_name_arr)
         tmp_file=''
         for uuid in res.keys():
-            pnp_perfdata=self.tmpl % (now, uuid,monitor_name,
-                    monitor_name,res[uuid][mon_res])
+            perf_data=''
+            for mon in mon_res:
+                perf_data+=name_dict[mon]+'='+res[uuid][mon]+' '
+            pnp_perfdata=self.tmpl % (now, uuid,
+                    monitor_name, perf_data)
             tmp_file+=pnp_perfdata
         with open(file_name,'w') as f:
             f.write(tmp_file)
@@ -299,8 +320,9 @@ if __name__ == '__main__':
     collector=CmdCollector()
 
     pnpstore=PNPStore()
-    resource=['cpu', 'disk_read','disk_write',
-            'network_in','network_out']
+    #resource=['cpu', 'disk_read','disk_write',
+    #        'network_in','network_out']
+    resource=['cpu', 'disk','network']
     monitors=MakeMonitors(resource,pnpstore)
 
     lmon=LibvirtMonitor(collector)
