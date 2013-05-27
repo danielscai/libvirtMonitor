@@ -312,7 +312,6 @@ class PNPStore(Store):
                 perf_data+=name_dict[mon]+'='+res[uuid][mon]+' '
             pnp_perfdata=self.tmpl % (now, uuid,
                     monitor_name, perf_data)
-            print pnp_perfdata
             tmp_file+=pnp_perfdata
         with open(file_name,'w') as f:
             f.write(tmp_file)
