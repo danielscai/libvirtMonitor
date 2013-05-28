@@ -315,6 +315,7 @@ class PNPStore(Store):
             tmp_file+=pnp_perfdata
         with open(file_name,'w') as f:
             f.write(tmp_file)
+            f.close()
 
 if __name__ == '__main__':
     collector=CmdCollector()
